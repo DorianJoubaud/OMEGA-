@@ -20,7 +20,7 @@ def sample_varied_gaussian(mu, cov, alpha_min=0.8, alpha_max=1.2, n=200):
     return z_samples, alpha_min
 
 
-def is_valid_with_stats(x, class_idx, catch22_bounds, envelope_bounds):
+def is_valid_with_stats_per_class(x, class_idx, catch22_bounds, envelope_bounds):
     # x : (N, L) ou (L,)
     if x.ndim == 1:
         x = x[None, :]
@@ -38,8 +38,27 @@ def is_valid_with_stats(x, class_idx, catch22_bounds, envelope_bounds):
         is_valid_list.append(valid_c22)
     return torch.tensor(is_valid_list, device=x.device)
 
+def is_valid_with_stats(x, catch22_bounds, envelope_bounds):
+    # x : (N, L) ou (L,)
+    if x.ndim == 1:
+        x = x[None, :]
+    # catch22
+    # print(class_idx)
+    is_valid_list = []
+    lower_c22, upper_c22 = catch22_bounds
+    lower_env, upper_env = envelope_bounds
+    for xi in x:
+        # 1. catch22
+        feats = np.array(catch22_all(xi.cpu().numpy())["values"])
+        valid_c22 = np.all((feats >= lower_c22) & (feats <= upper_c22))
+        # 2. envelope
+        valid_env = np.all((xi.cpu().numpy() >= lower_env) & (xi.cpu().numpy() <= upper_env))
+        is_valid_list.append(valid_c22)
+    return torch.tensor(is_valid_list, device=x.device)
 
-def compute_feature_bounds(X, y, features="catch22"):
+
+
+def compute_feature_bounds_per_class(X, y, features="catch22"):
     bounds_per_class = {}
     for cls in np.unique(y):
         X_cls = X[y==cls]
@@ -56,6 +75,22 @@ def compute_feature_bounds(X, y, features="catch22"):
             upper = mean + 2.58*std
             bounds_per_class[cls] = (lower, upper)
     return bounds_per_class
+
+def compute_feature_bounds(X, y, features="catch22"):
+    bounds = {}
+    if features == "catch22":
+        feats = np.stack([list(catch22_all(xi)["values"]) for xi in X])
+        lower = np.min(feats, axis=0)
+        upper = np.max(feats, axis=0)
+        bounds = (lower, upper)
+    elif features == "envelope":
+        mean = X.mean(axis=0)
+        std = X.std(axis=0)
+        # 99% envelope
+        lower = mean - 2.58*std
+        upper = mean + 2.58*std
+        bounds = (lower, upper)
+    return bounds
 
 
 
