@@ -4,7 +4,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pycatch22 import catch22_all
 
+from matplotlib.patches import Ellipse
 
+def plot_gaussian_ellipse(ax, mean, cov, color, label=None, scale=1.0, alpha=0.3, linestyle='-'):
+    # mean: (2,), cov: (2,2)
+    vals, vecs = np.linalg.eigh(cov)
+    order = vals.argsort()[::-1]
+    vals, vecs = vals[order], vecs[:, order]
+    theta = np.degrees(np.arctan2(*vecs[:,0][::-1]))
+    width, height = 2 * scale * np.sqrt(vals)
+    ellipse = Ellipse(xy=mean, width=width, height=height, angle=theta,
+                      edgecolor=color, fc='none', lw=2, ls=linestyle, label=label, alpha=alpha)
+    ax.add_patch(ellipse)
 def plot_umap_latents(
         Z_real_init,     # (N0, D) np.ndarray – latents réels initiaux
         Z_all,           # (N, D)  np.ndarray – latents pool complet
