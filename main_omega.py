@@ -64,7 +64,7 @@ def train_cVAE_pipeline(data_dir):
             val_pred = V_net(x_hat)
             loss_val = F.binary_cross_entropy_with_logits(val_pred, yb_r.float(), reduction='sum')
             loss_vae, loss_cls, loss_valcls = loss_fn(xb, x_hat, mu, logvar, z, yb, yb_r,
-                                                       cvae.cls_label, cvae.cls_cons, lambda_cons=0)
+                                                       cvae.cls_label, cvae.cls_cons)
             loss = loss_vae + loss_val
             loss.backward(); optimizer.step()
             train_loss += loss.item()
@@ -79,7 +79,7 @@ def train_cVAE_pipeline(data_dir):
                 val_pred = V_net(x_hat)
                 loss_val = F.binary_cross_entropy_with_logits(val_pred, yb_r.float(), reduction='sum')
                 vloss, vcls, vvalcls = loss_fn(xb, x_hat, mu, logvar, z, yb, yb_r,
-                                                cvae.cls_label, cvae.cls_cons, lambda_cons=0)
+                                                cvae.cls_label, cvae.cls_cons)
                 val_loss += (vloss + loss_val).item()
         avg_val = val_loss / len(dl_val.dataset)
         print(f"[Warm-up] Époch {epoch} → Train loss: {train_loss/len(dl_train.dataset):.4f}, "
@@ -94,12 +94,38 @@ def train_cVAE_pipeline(data_dir):
     x_all, y_all = x.clone(), y.clone()
     y_valid_all = y_real.clone()
 
+    _, n_data_per_class = torch.unique(y_all, return_counts=True) 
+    for i, nc in enumerate(n_data_per_class):
+        n_data_per_class[i] = int(nc.item() / 2)  # On garde la moitié pour la génération
+    print(f"Nombre de données par classe initiales : {n_data_per_class.tolist()}")
+    
     num_cycles = 100
     samples_per_cycle = 10
-    alpha = 1.5
+    alpha = 1.2
 
     for cycle in range(1, num_cycles+1):
         print(f"\n=== Cycle {cycle} ===")
+            # ── Équilibrage des synthétiques invalides ──
+        # Si plus de samples synth non-valides que de valides, on en garde seulement autant que de valides
+        invalid_synth_mask = is_synth_all.cpu() & (y_valid_all == 0)
+        num_invalid_synth = invalid_synth_mask.sum().item()
+        num_valid = y_valid_all.sum().item()
+        if num_invalid_synth > num_valid:
+            # indices des synth non-valides
+            invalid_idx = invalid_synth_mask.nonzero(as_tuple=True)[0]
+            # on en tire aléatoirement autant que de valides
+            perm = torch.randperm(len(invalid_idx), device=invalid_idx.device)
+            sampled_bad = invalid_idx[perm[:num_valid]]
+            # on conserve tous les bons + ces sampled_bad, on retire le reste
+            keep_good = (~invalid_synth_mask).nonzero(as_tuple=True)[0]
+            keep_idx = torch.cat([keep_good, sampled_bad], dim=0)
+            # on ré-indexe tous les tableaux
+            x_all         = x_all[keep_idx]
+            y_all         = y_all[keep_idx]
+            y_valid_all   = y_valid_all[keep_idx]
+            is_synth_all  = is_synth_all[keep_idx]
+            print(f"→ Échantillonnage: conservé {num_valid} synth invalides sur {num_invalid_synth}")
+
         print(f"Avant génération : total = {len(x_all)}, synthétiques = {is_synth_all.sum().item()}")
         print(f"Répartition y=1: {(y_all==1).sum().item()} | y=0: {(y_all==0).sum().item()} | Valides: {y_valid_all.sum().item()}")
 
@@ -143,7 +169,7 @@ def train_cVAE_pipeline(data_dir):
         # Échantillonnage et décodage
         x_gen, y_gen, yv_gen = [], [], []
         for c, mix in mixtures_scaled.items():
-            z_new = mix.sample((samples_per_cycle,))
+            z_new = mix.sample((n_data_per_class[c].item(),)).to(device)  # (N, latent_dim)
             yc = torch.full((len(z_new),), c, dtype=torch.long, device=device)
             yv = torch.ones_like(yc)
             with torch.no_grad():
@@ -169,8 +195,8 @@ def train_cVAE_pipeline(data_dir):
         ds_all = TensorDataset(x_all, y_all, y_valid_all)
         n_val = int(len(ds_all)*0.1)
         tr_ds, vl_ds = random_split(ds_all, [len(ds_all)-n_val, n_val])
-        dl_tr = DataLoader(tr_ds, batch_size=16, shuffle=True)
-        dl_vl = DataLoader(vl_ds, batch_size=16)
+        dl_tr = DataLoader(tr_ds, batch_size=8, shuffle=True)
+        dl_vl = DataLoader(vl_ds, batch_size=8)
 
         stopper_c = EarlyStopping(patience=10, min_delta=1e-4, mode='min')
         optimizer = torch.optim.Adam(cvae.parameters(), lr=1e-3)
@@ -185,7 +211,7 @@ def train_cVAE_pipeline(data_dir):
                 val_pred = V_net(x_hat)
                 loss_val = F.binary_cross_entropy_with_logits(val_pred, yb_r.float(), reduction='sum')
                 l_vae, l_cls, l_valcls = loss_fn(xb, x_hat, mu, logvar, z, yb, yb_r,
-                                                  cvae.cls_label, cvae.cls_cons, lambda_cons=2)
+                                                  cvae.cls_label, cvae.cls_cons)
                 loss = l_vae + loss_val
                 loss.backward(); optimizer.step()
                 train_l += loss.item(); cnt+=1
@@ -200,7 +226,7 @@ def train_cVAE_pipeline(data_dir):
                     val_pred = V_net(x_hat)
                     loss_val = F.binary_cross_entropy_with_logits(val_pred, yb_r.float(), reduction='sum')
                     l_vae, l_cls, l_valcls = loss_fn(xb, x_hat, mu, logvar, z, yb, yb_r,
-                                                      cvae.cls_label, cvae.cls_cons, lambda_cons=2)
+                                                      cvae.cls_label, cvae.cls_cons)
                     vl += (l_vae.item() + loss_val.item())
             avg_vl = vl/len(dl_vl.dataset)
             # print(f"Cycle {cycle} [Epoch {epoch}] → Val loss: {avg_vl:.4f}")
@@ -273,31 +299,29 @@ def train_cVAE_pipeline(data_dir):
                     pdf_vals = logp.exp().cpu().numpy().reshape(xx.shape)
                 level = pdf_vals.max() * 0.8  # par exemple 10% du max
 
-                ax1.contour(
+                contour1 = ax1.contour(
                     xx, yy, pdf_vals,
-                    levels=[level],
+                    # levels=[level],
                     colors=[f"C{class_label}"],
                     linestyles='-',
-                    linewidths=1.5,
-                    label=f"Unscaled PDF cls{class_label}"
+                    linewidths=1.5
                 )
-
-            # ─── Tracé des contours PDF scalés (avec α) ───
+                # contour1.collections[0].set_label(f"Unscaled PDF cls{class_label}")  # pour la légende
+            
             for class_label, mix in mixtures_scaled.items():
                 with torch.no_grad():
                     logp     = mix.log_prob(z_grid)
                     pdf_vals = logp.exp().cpu().numpy().reshape(xx.shape)
                 level = pdf_vals.max() * 0.8
 
-                ax1.contour(
+                contour2 = ax1.contour(
                     xx, yy, pdf_vals,
-                    levels=[level],
+                    # levels=[level],
                     colors=[f"C{class_label}"],
                     linestyles='--',   # tirets pour distinction
-                    linewidths=1.5,
-                    label=f"Scaled PDF cls{class_label}"
+                    linewidths=1.5
                 )
-
+                # contour2.collections[0].set_label(f"Scaled PDF cls{class_label}")  # pour la légende
 
             # ex. Plot 1 : mêmes sélections qu’avant mais en 2D
             for cls, marker in zip([0,1], ['o','^']):
@@ -316,6 +340,24 @@ def train_cVAE_pipeline(data_dir):
             with torch.no_grad():
                 probs_class = torch.sigmoid(cvae.cls_label(z_grid)).cpu().numpy().reshape(xx.shape)
                 probs_valid = torch.sigmoid(cvae.cls_cons(z_grid)).cpu().numpy().reshape(xx.shape)
+            # Après avoir calculé probs_valid et valid_oracle
+            # plt.figure(figsize=(6, 5))
+            # # Heatmap de la PDF (fond bleu)
+            # plt.imshow(pdf_vals, extent=(x_min, x_max, y_min, y_max), origin='lower',
+            #         cmap='Blues', alpha=0.6, aspect='auto')
+            # plt.colorbar(label="Densité PDF")
+            
+            # # -- Superpose la frontière du classifieur
+            # plt.contour(xx, yy, probs_class, levels=[0.5], colors='red', linewidths=2, linestyles='--', label='Frontière de décision')
+            
+            # plt.title(f"PDF étendue (classe {class_label}) + frontière de décision")
+            # plt.xlabel("Latent 1")
+            # plt.ylabel("Latent 2")
+            # # Tu peux aussi ajouter les centres/ellipses si tu veux
+            # plt.tight_layout()
+            # plt.savefig(f"visu/heatmap_pdf_scaled_cls{class_label}_cycle_{cycle}.png", dpi=200, facecolor='white')
+            # plt.close()
+            # # ─── Tracé de
 
             # 6) Tracer les frontières de décision
             ax1.contour(xx, yy, probs_class, levels=[0.5], colors='k', linestyles='--')
@@ -372,7 +414,7 @@ def train_cVAE_pipeline(data_dir):
             valid_mask = y_valid_all.cpu().numpy()
             is_synth = is_synth_all.cpu().numpy()
 
-            plot_umap_signals(X_real_init, X_dec, labels, valid_mask, is_synth, cycle)
+            # plot_umap_signals(X_real_init, X_dec, labels, valid_mask, is_synth, cycle)
             plot_class_time_series(
                 X_init     = X_real_init,
                 X_all      = X_dec,

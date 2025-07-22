@@ -49,8 +49,7 @@ def plot_umap_latents(
             label = f"{'réel' if synth == 0 else 'synth'}·cls{cls}"
             ax1.scatter(proj[mask,0], proj[mask,1],
                         c=colors[cls], marker=markers[synth],
-                        label=label, alpha=0.7, s=30, 
-                        edgecolor='k' if synth else None)
+                        label=label, alpha=0.7, s=30)
     ax1.set_title("UMAP latents – Couleur=classe, marker=réel/synth")
     ax1.legend(fontsize='small')
 

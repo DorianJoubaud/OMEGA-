@@ -22,7 +22,7 @@ def contrastive_loss(z, labels, margin=1.0):
         return (positive_loss + negative_loss).mean()
     
     
-def loss_fn(x,x_hat,mu,log_var, z, y, y_valid, classifier, validator, lambda_label=2.0, lambda_cons=1.0 , lambda_contrastive=2.0):
+def loss_fn(x,x_hat,mu,log_var, z, y, y_valid, classifier, validator, lambda_label=1.0, lambda_cons=1.0 , lambda_contrastive=1.0):
     recon = F.mse_loss(x_hat,x,reduction='sum')
     kld   = -0.5*torch.sum(1+log_var-mu.pow(2)-log_var.exp())
     logits_label = classifier(z).view(-1)
@@ -31,4 +31,4 @@ def loss_fn(x,x_hat,mu,log_var, z, y, y_valid, classifier, validator, lambda_lab
     l_cons = F.binary_cross_entropy_with_logits(logits_cons, y_valid.float(),reduction='sum')
     contrastive_loss_value = contrastive_loss(z, y)
     constrative_loss_valid = contrastive_loss(z, y_valid)
-    return 5*recon + kld + lambda_label*l_label + lambda_cons*l_cons + lambda_contrastive * contrastive_loss_value + lambda_contrastive * 0.0 * constrative_loss_valid, l_label, l_cons
+    return 2*recon + 0.5*kld + lambda_label*l_label + lambda_cons*l_cons + lambda_contrastive * contrastive_loss_value + lambda_cons * constrative_loss_valid, l_label, l_cons
